@@ -1,6 +1,6 @@
 # AudioStreamKit V1 — Streaming & Caching Design
 
-Status: Accepted (2026-09-11). Detail behind the `MediaSource`/`MediaCache`
+Detail behind the `MediaSource`/`MediaCache`
 boxes in `high-level-architecture.md`. Rationale for choosing this approach
 over the simpler alternative is in `../decisions/ADR-001-resource-loading-strategy.md`.
 
