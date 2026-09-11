@@ -50,8 +50,7 @@ behavior, retry behavior, cancellation).
   LRU-bounded, ETag/Last-Modified validated. Pure data management — "what
   do you have for this range" / "here's a range I fetched, store it."
 - **`RetryPolicy`** — small, focused exponential-backoff logic for
-  recoverable network failures during streaming. See `ADR-002` for why
-  this is hand-rolled rather than a SwiftResilience dependency.
+  recoverable network failures during streaming.
 
 ## Concurrency Model (overview)
 
