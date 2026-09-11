@@ -89,18 +89,6 @@ V1 and is deferred to a later milestone.
   controller + cache configuration. Internal subsystems aren't public
   unless a consumer genuinely needs them.
 
-## Networking Dependency Boundary
-
-AudioStreamKit does not duplicate the user's separate SwiftResilience
-framework. SwiftResilience is scoped to discrete API request/response
-orchestration (retry, dedup, offline request queueing, background
-draining, token refresh, observability) and explicitly does not cover byte
-range requests, resumable/large downloads, streaming, or media-body
-caching. AudioStreamKit owns all actual media-byte transfer, streaming,
-and caching. SwiftResilience would only be reused if AudioStreamKit ever
-needs a discrete API call (e.g. resolving a manifest/stream URL); no such
-call exists in V1.
-
 ## Test/Demo Content
 
 No backend exists yet to resolve playable media URLs. Verified-working
