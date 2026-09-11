@@ -64,11 +64,9 @@ later topic.
 
 ## Module Structure
 
-Single SPM target (`AudioStreamKit`) for V1, organized internally by
+Single SPM target (`AudioStreamKit`), organized internally by
 folder (`Playback/`, `Cache/`, `Networking/`, `State/`, `PublicAPI/`)
-rather than split into multiple SPM targets. Splitting now would be
-premature; revisit if/when the download/offline milestone adds enough
-surface to justify it.
+rather than split into multiple SPM targets.
 
 ## Public API Philosophy
 
