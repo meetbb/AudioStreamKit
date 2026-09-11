@@ -25,7 +25,7 @@ AudioPlayer  (public facade, actor)
 `MediaCache` and `MediaSource` do not know `PlaybackEngine` exists;
 `PlaybackEngine` does not know `AudioPlayer` exists. This is deliberate: it
 lets each layer be tested in isolation, and each layer maps to one of the
-test categories required by `AGENTS.md` (state transitions, cache
+test categories (state transitions, cache
 behavior, retry behavior, cancellation).
 
 ## Component Responsibilities
