@@ -14,11 +14,13 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "AudioStreamKit"
+            name: "AudioStreamKit",
+            swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
             name: "AudioStreamKitTests",
-            dependencies: ["AudioStreamKit"]
+            dependencies: ["AudioStreamKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
         )
     ]
 )

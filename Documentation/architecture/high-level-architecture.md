@@ -79,5 +79,10 @@ can change any internal subsystem without breaking consumers.
 
 - `v1-requirements.md` — the requirements this architecture satisfies.
 - `streaming-and-caching.md` — detailed design of `MediaSource`/`MediaCache`.
+- `playback-state-machine.md` — detailed design of `PlaybackStateMachine`.
+- `public-api.md` — detailed design of the public `AudioPlayer` surface.
+- `concurrency-model.md` — isolation boundaries and `Sendable` requirements.
+- `error-handling-strategy.md` — finalized `PlaybackError` taxonomy and
+  retry-vs-terminal classification rules.
 - `../decisions/ADR-001-resource-loading-strategy.md`
 - `../decisions/ADR-002-retry-policy-dependency.md`
