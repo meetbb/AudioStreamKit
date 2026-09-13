@@ -1,6 +1,6 @@
 # AudioStreamKit V1 — Concurrency Model
 
-Status: Proposed (2026-09-11) — drafted, not yet discussed/confirmed.
+Status: Accepted (2026-09-13).
 Detail behind the "Concurrency Model (overview)" section in
 `high-level-architecture.md`. Satisfies NFR6, NFR7, NFR10, NFR11.
 

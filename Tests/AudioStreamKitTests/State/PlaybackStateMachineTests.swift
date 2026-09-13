@@ -135,6 +135,11 @@ final class PlaybackStateMachineTests: XCTestCase {
         var machine = makeEnded()
         XCTAssertEqual(machine.handle(.seekRequested), .paused)
     }
+    
+    func test_ended_pauseRequested_goesToPaused() {
+        var machine = makePausedFromPlaying()
+        XCTAssertEqual(machine.handle(.pauseRequested), .paused)
+    }
 
     func test_failed_loadRequested_allowsRetryFromScratch() {
         var machine = makeFailed()

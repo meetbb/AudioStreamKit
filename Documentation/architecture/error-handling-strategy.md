@@ -1,5 +1,7 @@
 # AudioStreamKit V1 — Error Handling Strategy
 
+Status: Accepted (2026-09-13).
+
 Finalizes the `PlaybackError` sketch in `public-api.md` §6 and the retry
 integration referenced in `streaming-and-caching.md` §6. Satisfies FR10,
 FR11, FR12, NFR8.
@@ -172,9 +174,9 @@ bypassing `RetryPolicy` entirely. On retry-budget exhaustion,
 produce the `PlaybackError` payload for `.retryBudgetExhausted(error)` —
 same function, no separate exhaustion-specific mapping to keep in sync.
 
-## 6. Retry budget scope — proposed, needs confirmation
+## 6. Retry budget scope — accepted (2026-09-13)
 
-**Proposed: item-scoped, not range-scoped.** A single rolling
+**Item-scoped, not range-scoped.** A single rolling
 attempt/failure count tracked per loaded item (reset on `.loadRequested`
 and on any successful range fetch), not a fresh budget for every new
 byte-range request.
@@ -189,15 +191,14 @@ forward progress — a successful fetch) is what actually satisfies NFR8's
 termination for a truly bad connection regardless of how failures are
 distributed across ranges.
 
-**This is flagged, not silently decided, because it changes observable
-behavior**: a brief real-world flaky patch (several different ranges
-each failing once, each succeeding on their own first retry) would
-consume shared budget under item-scoping but not under range-scoping.
-Needs your confirmation before this is Accepted.
+**This was flagged rather than silently decided, because it changes
+observable behavior**: a brief real-world flaky patch (several different
+ranges each failing once, each succeeding on their own first retry)
+consumes shared budget under item-scoping but not under range-scoping.
+Confirmed 2026-09-13: item-scoped.
 
 ## 7. Open questions
 
-- §6 retry-budget scope — not yet confirmed.
 - Exact backoff parameters (base delay, max attempts, jitter) for
   `RetryPolicy` — implementation detail, deferred per
   `concurrency-model.md` §9 (already flagged there as out of scope for
