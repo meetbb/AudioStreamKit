@@ -8,6 +8,31 @@
 import Foundation
 import AVFoundation
 
+/// Reports `MediaSource`'s internal retry lifecycle (`fetchWithRetry`) outward, since nothing
+/// about it is otherwise observable from outside `MediaSource` itself. `AnyObject`-bound so
+/// `MediaSource` can hold its delegate `weak` — `PlaybackEngine` (the only real conformer)
+/// owns the `MediaSource` it sets itself as delegate on, so a strong reference back would be
+/// a retain cycle.
+///
+/// `async` requirements, not a `Task`-wrapped fire-and-forget callback: `fetchWithRetry` is
+/// already running inside its own `async` context, so it can simply `await` these directly —
+/// unlike the synchronous KVO/`NotificationCenter` callbacks `PlaybackEngine` bridges
+/// elsewhere, there's no non-async boundary here to hop across.
+protocol MediaSourceDelegate: AnyObject {
+    /// The first retryable failure on a range fetch — maps to `.networkStallBegan`
+    /// (`playback-state-machine.md` §2).
+    func mediaSourceDidBeginStall() async
+
+    /// A range fetch that had previously stalled just succeeded — maps to
+    /// `.networkStallRecovered`. Never called for a fetch that succeeded on its first try.
+    func mediaSourceDidRecoverFromStall() async
+
+    /// The item-scoped retry budget (`error-handling-strategy.md` §6) is exhausted — maps to
+    /// `.retryBudgetExhausted(PlaybackError)`. `error` is already classified, ready to hand
+    /// straight to the state machine.
+    func mediaSource(_ mediaSource: MediaSource, didExhaustRetryBudgetWith error: PlaybackError) async
+}
+
 /// Intercepts `AVPlayer`'s resource loading so AudioStreamKit issues the actual network
 /// requests itself, rather than letting AVFoundation stream from the remote URL opaquely.
 /// See `ADR-001-resource-loading-strategy.md` and `streaming-and-caching.md`.
@@ -28,9 +53,13 @@ import AVFoundation
 ///
 /// `@unchecked Sendable`: needed so the tracked-`Task`s this type hands out can capture
 /// `self` under Swift 6 strict concurrency (the compiler can't infer `Sendable` through
-/// `NSObject`). Safe because every stored property is `let`-bound and either itself
+/// `NSObject`). Safe because almost every stored property is `let`-bound and either itself
 /// `Sendable` (`URLSession`, `RetryPolicy`, `DispatchQueue`) or an `actor`
-/// (`tracker`, `retryState`) — there is no other mutable state to race on.
+/// (`tracker`, `retryState`). The one exception is `delegate` — a `weak var` — but it's
+/// written exactly once, synchronously, by `PlaybackEngine` immediately after constructing
+/// this instance and before any concurrent work has started; every read of it thereafter
+/// happens no earlier than that write could have completed, so there's no actual race despite
+/// the property being mutable.
 final class MediaSource: NSObject, @unchecked Sendable {
 
     private static let rewrittenHTTPSScheme = "astk-https"
@@ -46,6 +75,12 @@ final class MediaSource: NSObject, @unchecked Sendable {
     /// loaded, reset on `makeAsset(for:)` (a fresh `.loadRequested`) and on every
     /// successful range fetch. See `error-handling-strategy.md` §6.
     private let retryState = RetryState()
+
+    /// Reports stall/recovery/exhaustion signals from `fetchWithRetry` outward — see
+    /// `MediaSourceDelegate`. `weak` so `MediaSource` never keeps `PlaybackEngine` (its owner)
+    /// alive; see the type's header comment for why this being mutable doesn't threaten
+    /// `@unchecked Sendable`.
+    weak var delegate: MediaSourceDelegate?
 
     init(session: URLSession = .shared, retryPolicy: RetryPolicy = .default, mediaCache: MediaCache = MediaCache()) {
         self.session = session
@@ -363,22 +398,36 @@ private extension MediaSource {
 
     /// Fetches `[lowerBound, upperBoundExclusive)` (or to the end of the resource if
     /// `upperBoundExclusive` is nil), retrying transient failures against the item-scoped
-    /// budget.
+    /// budget. Reports the stall lifecycle to `delegate` as it happens: the *first* retryable
+    /// failure (`didStall` flips `true`) reports `mediaSourceDidBeginStall()`; a later success
+    /// only reports `mediaSourceDidRecoverFromStall()` if this call actually stalled (a
+    /// first-try success isn't a "recovery" from anything); exhausting the budget reports
+    /// `mediaSource(_:didExhaustRetryBudgetWith:)` with the classified error before throwing.
     func fetchWithRetry(from lowerBound: Int64, upTo upperBoundExclusive: Int64?, url: URL) async throws -> Data {
+        var didStall = false
         while true {
             try Task.checkCancellation()
             do {
                 let data = try await fetchRange(from: lowerBound, upTo: upperBoundExclusive, url: url)
                 await retryState.reset()
+                if didStall {
+                    await delegate?.mediaSourceDidRecoverFromStall()
+                }
                 return data
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
-                guard case .retryable = FailureClassifier.classify(error) else {
+                let classification = FailureClassifier.classify(error)
+                guard case .retryable = classification else {
                     throw error
+                }
+                if !didStall {
+                    didStall = true
+                    await delegate?.mediaSourceDidBeginStall()
                 }
                 let attempt = await retryState.recordFailureAndNextAttempt()
                 guard retryPolicy.hasBudget(forAttempt: attempt) else {
+                    await delegate?.mediaSource(self, didExhaustRetryBudgetWith: classification.playbackError)
                     throw error
                 }
                 try await Task.sleep(for: .seconds(retryPolicy.delay(forAttempt: attempt)))

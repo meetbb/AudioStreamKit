@@ -65,9 +65,6 @@ actor PlaybackEngine {
     /// `teardownCurrentSession()`.
     private var interruptionObservation: NSObjectProtocol?
 
-    // TODO: `AVAudioSession.interruptionNotification` token — same pattern as
-    // `didPlayToEndObservation` above, once `handleAudioSessionInterruption` is implemented.
-
     // MARK: - Init
 
     init(
@@ -76,6 +73,10 @@ actor PlaybackEngine {
     ) {
         self.stateSink = stateSink
         self.mediaSource = mediaSource
+        // Every stored property is now initialized, so `self` is safe to hand out — this is
+        // why `mediaSource.delegate` can't be set via a closure/value captured in the
+        // parameter list above (there's no `self` yet at that point), but can be set here.
+        mediaSource.delegate = self
     }
 
     // MARK: - Commands (called by AudioPlayer's public methods)
@@ -256,16 +257,17 @@ actor PlaybackEngine {
     /// Reports a `MediaSource`-level transient failure as `.networkStallBegan`/
     /// `.networkStallRecovered`, and a retry-budget exhaustion as
     /// `.retryBudgetExhausted(PlaybackError)` (`playback-state-machine.md` §2,
-    /// `error-handling-strategy.md` §2 Tier 1).
-    ///
-    /// NOT YET WIRED: `MediaSource` doesn't currently expose a stall/exhaustion signal to its
-    /// caller at all — its retry loop (`fetchWithRetry` in `MediaSource.swift`) is entirely
-    /// private to `fulfillDataRequest`. Making `.stalled`/`.retryBudgetExhausted` real requires
-    /// first deciding how `MediaSource` reports this outward (a delegate callback? an
-    /// `AsyncStream`? a closure passed at init?) — that's an open design question for when this
-    /// function is actually implemented, not something this skeleton should silently invent.
-    private func handleMediaSourceStallSignal() {
-        // TODO
+    /// `error-handling-strategy.md` §2 Tier 1). Fed by the `MediaSourceDelegate` conformance
+    /// below, which is `MediaSource.fetchWithRetry`'s only way to report this outward.
+    private func handleMediaSourceStallSignal(_ signal: MediaSourceSignal) {
+        switch signal {
+        case .stallBegan:
+            apply(.networkStallBegan)
+        case .stallRecovered:
+            apply(.networkStallRecovered)
+        case .retryBudgetExhausted(let error):
+            apply(.retryBudgetExhausted(error))
+        }
     }
 
     /// Observes `NotificationCenter` for `.AVPlayerItemDidPlayToEndTime` on `currentItem` ->
@@ -418,5 +420,31 @@ actor PlaybackEngine {
     /// would. Also `MainActor`-hopped, same reasoning as `updateNowPlayingInfo(for:)`.
     private func configureRemoteCommands() async {
         // TODO
+    }
+}
+
+/// The three things `MediaSource.fetchWithRetry` can report, collapsed into one type so
+/// `handleMediaSourceStallSignal(_:)` has a single funnel-in point rather than three separate
+/// private functions — mirrors how `apply(_:)` is the one funnel-in point for state-machine
+/// events.
+enum MediaSourceSignal {
+    case stallBegan
+    case stallRecovered
+    case retryBudgetExhausted(PlaybackError)
+}
+
+// MARK: - MediaSourceDelegate
+
+extension PlaybackEngine: MediaSourceDelegate {
+    func mediaSourceDidBeginStall() async {
+        handleMediaSourceStallSignal(.stallBegan)
+    }
+
+    func mediaSourceDidRecoverFromStall() async {
+        handleMediaSourceStallSignal(.stallRecovered)
+    }
+
+    func mediaSource(_ mediaSource: MediaSource, didExhaustRetryBudgetWith error: PlaybackError) async {
+        handleMediaSourceStallSignal(.retryBudgetExhausted(error))
     }
 }
