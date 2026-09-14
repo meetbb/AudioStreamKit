@@ -57,9 +57,16 @@ actor PlaybackEngine {
     /// KVO token for `player.timeControlStatus`, removed in `teardownCurrentSession()`.
     private var timeControlStatusObservation: NSKeyValueObservation?
 
-    // TODO: NotificationCenter tokens (`.AVPlayerItemDidPlayToEndTime`,
-    // `AVAudioSession.interruptionNotification`) — same pattern as the two KVO tokens above,
-    // once `handleItemDidPlayToEnd`/`handleAudioSessionInterruption` are implemented.
+    /// NotificationCenter token for `AVPlayerItem.didPlayToEndTimeNotification` on
+    /// `currentItem`, removed in `teardownCurrentSession()`.
+    private var didPlayToEndObservation: NSObjectProtocol?
+
+    /// NotificationCenter token for `AVAudioSession.interruptionNotification`, removed in
+    /// `teardownCurrentSession()`.
+    private var interruptionObservation: NSObjectProtocol?
+
+    // TODO: `AVAudioSession.interruptionNotification` token — same pattern as
+    // `didPlayToEndObservation` above, once `handleAudioSessionInterruption` is implemented.
 
     // MARK: - Init
 
@@ -173,17 +180,24 @@ actor PlaybackEngine {
     /// Reads `player.currentTime()` directly on demand. No push stream / periodic time
     /// observer — FR5 only requires *exposing* position, not streaming live updates
     /// (`public-api.md` §3), so `AudioPlayer.currentTime` just awaits this each time a caller
-    /// asks.
+    /// asks. `CMTimeGetSeconds` returns `NaN` when there's no player yet or the time isn't
+    /// known — treated as `0`, since "nothing has played yet" is a reasonable default (unlike
+    /// `duration` below, there's no meaningful "unknown position" to distinguish it from).
     var currentTime: TimeInterval {
-        // TODO
-        fatalError("not implemented")
+        guard let player else { return 0 }
+        let seconds = CMTimeGetSeconds(player.currentTime())
+        return seconds.isFinite ? seconds : 0
     }
 
     /// `nil` until `currentItem`'s duration becomes known (i.e. before `.itemReady`) — mirrors
-    /// `AudioPlayer.duration`'s optionality in the public API.
+    /// `AudioPlayer.duration`'s optionality in the public API. `CMTimeGetSeconds` returns `NaN`
+    /// for an item whose duration isn't known yet, which is the actual signal for "unknown" —
+    /// mapped to `nil` rather than `0`, since those mean different things to a caller building
+    /// a progress bar.
     var duration: TimeInterval? {
-        // TODO
-        fatalError("not implemented")
+        guard let currentItem else { return nil }
+        let seconds = CMTimeGetSeconds(currentItem.duration)
+        return seconds.isFinite ? seconds : nil
     }
 
     // MARK: - Turning raw signals into PlaybackEvents (playback-state-machine.md §3)
@@ -255,20 +269,51 @@ actor PlaybackEngine {
     }
 
     /// Observes `NotificationCenter` for `.AVPlayerItemDidPlayToEndTime` on `currentItem` ->
-    /// `.itemEnded`.
+    /// `.itemEnded`. Only meaningfully changes anything from `.playing` (-> `.ended`,
+    /// `playback-state-machine.md` `.playing` row) — the state machine already ignores it
+    /// safely from every other state, so there's nothing else for this function to decide.
     private func handleItemDidPlayToEnd() {
-        // TODO
+        apply(.itemEnded)
     }
 
-    /// Observes `AVAudioSession.interruptionNotification` -> `.interruptionBegan` /
-    /// `.interruptionEnded(shouldResume:)`, forwarding the system's
+    /// Reports `.interruptionBegan` / `.interruptionEnded(shouldResume:)` from a decoded
+    /// `AVAudioSession.interruptionNotification`, forwarding the system's
     /// `AVAudioSession.InterruptionOptions.contains(.shouldResume)` bit straight through. The
     /// state machine itself ANDs that with its own `resumeIntent` memory of whether *this app*
     /// was actively playing before the interruption (FR8, `playback-state-machine.md` §6) — the
     /// combining logic belongs there, not here.
-    private func handleAudioSessionInterruption(_ notification: Notification) {
-        // TODO
+    ///
+    /// Takes the already-decoded `typeValue`/`optionsValue` raw values, not the `Notification`
+    /// itself — `Notification` isn't `Sendable` (its `userInfo` can hold arbitrary non-Sendable
+    /// objects), so it can't safely cross into this `Task`-hop under Swift 6's data-race
+    /// checking. The registration closure in `startObserving(_:)` decodes the notification
+    /// synchronously and hands over only these plain, `Sendable` `UInt`s.
+    ///
+    /// NOTE: this only reacts to interruption notifications — it doesn't configure or activate
+    /// the app's `AVAudioSession` category (e.g. `.playback`) anywhere yet. That's a separate,
+    /// not-yet-made decision about where session setup belongs (likely inside `load(_:)`), out
+    /// of scope for this function.
+    ///
+    /// `#if os(iOS)`: `AVAudioSession` itself is iOS/tvOS/watchOS-only — explicitly unavailable
+    /// on macOS, which this package also targets (`Package.swift`). Everywhere else in this
+    /// file works identically cross-platform; this is the one function that can't.
+    #if os(iOS)
+    private func handleAudioSessionInterruption(typeValue: UInt, optionsValue: UInt) {
+        guard let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+            return
+        }
+
+        switch type {
+        case .began:
+            apply(.interruptionBegan)
+        case .ended:
+            let options = AVAudioSession.InterruptionOptions(rawValue: optionsValue)
+            apply(.interruptionEnded(shouldResume: options.contains(.shouldResume)))
+        @unknown default:
+            break
+        }
     }
+    #endif
 
     // MARK: - Session lifecycle
 
@@ -277,12 +322,18 @@ actor PlaybackEngine {
     /// `stop()`, so "cleanly release resources" (FR13) has exactly one implementation instead
     /// of two copies that could drift apart.
     private func teardownCurrentSession() {
-        // TODO: also remove the NotificationCenter tokens once `startObserving(_:)` registers
-        // them (`.AVPlayerItemDidPlayToEndTime`, `AVAudioSession.interruptionNotification`).
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
         timeControlStatusObservation?.invalidate()
         timeControlStatusObservation = nil
+        if let didPlayToEndObservation {
+            NotificationCenter.default.removeObserver(didPlayToEndObservation)
+        }
+        didPlayToEndObservation = nil
+        if let interruptionObservation {
+            NotificationCenter.default.removeObserver(interruptionObservation)
+        }
+        interruptionObservation = nil
         mediaSource.cancelAll()
         player?.pause()
         player = nil
@@ -313,8 +364,44 @@ actor PlaybackEngine {
             })
         })
 
-        // TODO: `.AVPlayerItemDidPlayToEndTime` notification, `AVAudioSession.interruptionNotification`
-        // — same bridging pattern as above, once their handler functions are implemented.
+        // `NotificationCenter`, like KVO above, delivers on an arbitrary thread — same `Task`
+        // hop. Scoped to `object: item` so a stale notification from a previously-replaced
+        // item can never reach this (new) item's handler.
+        didPlayToEndObservation = NotificationCenter.default.addObserver(
+            forName: AVPlayerItem.didPlayToEndTimeNotification,
+            object: item,
+            queue: nil
+        ) { [weak self] _ in
+            guard let self else { return }
+            Task { await self.handleItemDidPlayToEnd() }
+        }
+
+        // `AVAudioSession` is iOS/tvOS/watchOS-only (see `handleAudioSessionInterruption`'s
+        // doc comment) — this package also targets macOS, so this registration only compiles
+        // in on platforms where the type exists at all.
+        #if os(iOS)
+        // Scoped to `object: AVAudioSession.sharedInstance()` even though there's only ever
+        // one shared instance — consistent with scoping the notification above to its exact
+        // source object, rather than relying on `nil` (any object) by convention.
+        interruptionObservation = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.interruptionNotification,
+            object: AVAudioSession.sharedInstance(),
+            queue: nil
+        ) { [weak self] notification in
+            // Decode synchronously, here, before the `Task` hop — `Notification` isn't
+            // `Sendable`, so only the plain `UInt`s extracted from it can safely cross into
+            // the actor-isolated handler (see `handleAudioSessionInterruption`'s doc comment).
+            guard let self,
+                  let userInfo = notification.userInfo,
+                  let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt else {
+                return
+            }
+            let optionsValue = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+            Task {
+                await self.handleAudioSessionInterruption(typeValue: typeValue, optionsValue: optionsValue)
+            }
+        }
+        #endif
     }
 
     // MARK: - Now Playing / Remote Command Center (FR6)

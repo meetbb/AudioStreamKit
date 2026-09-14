@@ -144,4 +144,28 @@ final class PlaybackEngineTests: XCTestCase {
         let state = await iterator.next()
         XCTAssertEqual(state, .failed(.invalidURL))
     }
+
+    // MARK: - currentTime / duration
+    //
+    // Only the "no player yet" defaults are testable without a resolved asset — the real
+    // values (a genuine position/duration once `.itemReady` fires) need the same network
+    // gap noted throughout this file.
+
+    func test_currentTime_beforeAnyLoad_isZero() async {
+        var continuation: AsyncStream<PlaybackState>.Continuation!
+        _ = AsyncStream<PlaybackState> { continuation = $0 }
+        let engine = PlaybackEngine(stateSink: continuation)
+
+        let currentTime = await engine.currentTime
+        XCTAssertEqual(currentTime, 0)
+    }
+
+    func test_duration_beforeAnyLoad_isNil() async {
+        var continuation: AsyncStream<PlaybackState>.Continuation!
+        _ = AsyncStream<PlaybackState> { continuation = $0 }
+        let engine = PlaybackEngine(stateSink: continuation)
+
+        let duration = await engine.duration
+        XCTAssertNil(duration)
+    }
 }
