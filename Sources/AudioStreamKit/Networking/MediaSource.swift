@@ -20,11 +20,11 @@ import AVFoundation
 /// loadingRequest -> Task bookkeeping needed for correct cancellation.
 ///
 /// `contentInformationRequest` answers from `MediaCache` when cached, otherwise probes the
-/// origin and stores the result. `dataRequest` diffs the requested range against the cache
-/// and walks it as present/missing segments, responding from disk for hits and
-/// fetching+caching gaps (write-through, best-effort) — see `streaming-and-caching.md` §4.
-/// Not implemented yet: opportunistic ETag/Last-Modified revalidation (§7) — once cached, an
-/// entry is trusted indefinitely.
+/// origin and stores the result. On a cache hit it also opportunistically revalidates
+/// against the origin (`streaming-and-caching.md` §7) before answering. `dataRequest` diffs
+/// the requested range against the cache and walks it as present/missing segments,
+/// responding from disk for hits and fetching+caching gaps (write-through, best-effort) —
+/// see `streaming-and-caching.md` §4.
 ///
 /// `@unchecked Sendable`: needed so the tracked-`Task`s this type hands out can capture
 /// `self` under Swift 6 strict concurrency (the compiler can't infer `Sendable` through
@@ -174,15 +174,16 @@ private extension MediaSource {
 
 private extension MediaSource {
 
-    /// Answers from `MediaCache` if this URL is already cached (no network); otherwise
-    /// probes the origin and stores the result for next time. Does not revalidate an
-    /// existing cache entry against the origin — see the type's header comment.
+    /// Answers from `MediaCache` if this URL is already cached, opportunistically
+    /// revalidating first (`streaming-and-caching.md` §7); otherwise probes the origin fresh
+    /// and stores the result for next time.
     func populateContentInformation(
         _ infoRequest: AVAssetResourceLoadingContentInformationRequest,
         url: URL
     ) async throws {
         if let cached = await mediaCache.metadata(for: url) {
-            apply(cached, to: infoRequest)
+            let metadata = await revalidate(cached, url: url)
+            apply(metadata, to: infoRequest)
             await mediaCache.recordAccess(for: url)
             return
         }
@@ -198,6 +199,30 @@ private extension MediaSource {
         )
         apply(stored, to: infoRequest)
         await mediaCache.recordAccess(for: url)
+    }
+
+    /// Opportunistic revalidation (`streaming-and-caching.md` §7): if `cached` has a stored
+    /// `etag`/`lastModified`, probes the origin fresh and compares. A changed validator
+    /// invalidates the entry (discarding its cached bytes, per `MediaCache.invalidate`) and
+    /// stores the fresh probe result in its place, so `dataRequest` refetches from scratch.
+    /// An unreachable origin, or a cached entry with no validator to compare against, means
+    /// the existing entry is returned as-is — trusting the cache rather than failing keeps
+    /// offline playback working (FR17).
+    func revalidate(_ cached: CacheEntryMetadata, url: URL) async -> CacheEntryMetadata {
+        guard cached.etag != nil || cached.lastModified != nil else { return cached }
+        guard let probe = try? await probe(url: url) else { return cached }
+        guard probe.etag != cached.etag || probe.lastModified != cached.lastModified else { return cached }
+
+        await mediaCache.invalidate(for: url)
+        guard let stored = try? await mediaCache.storeMetadata(
+            originalURL: url,
+            contentLength: probe.contentLength,
+            mimeType: probe.mimeType,
+            etag: probe.etag,
+            lastModified: probe.lastModified,
+            supportsByteRangeAccess: probe.supportsByteRanges
+        ) else { return cached }
+        return stored
     }
 
     func apply(_ metadata: CacheEntryMetadata, to infoRequest: AVAssetResourceLoadingContentInformationRequest) {
