@@ -33,10 +33,10 @@ extension PlaybackError: LocalizedError {
 
 extension PlaybackError {
     /// Broad grouping a caller can use to tailor user-facing messaging or telemetry without
-    /// hand-rolling a `switch` over every case by name — a real gap, caught in review:
-    /// `.audioSessionUnavailable` (a system-resource problem) sat flat alongside content
-    /// problems (`.decodeFailed`, `.unsupportedFormat`) and network problems (`.network`,
-    /// `.http`) with no structural way to tell them apart.
+    /// hand-rolling a `switch` over every case by name — without it, `.audioSessionUnavailable`
+    /// (a system-resource problem) would sit flat alongside content problems (`.decodeFailed`,
+    /// `.unsupportedFormat`) and network problems (`.network`, `.http`) with no structural way
+    /// to tell them apart.
     ///
     /// This is **not** a statement about retry behavior — every `PlaybackError` a caller ever
     /// sees is already terminal (`error-handling-strategy.md` Tier 2): a transient failure worth

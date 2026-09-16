@@ -37,9 +37,8 @@ enum FailureClassifier {
         if let httpError = error as? HTTPStatusError {
             return classifyHTTP(httpError.statusCode)
         }
-        // Anything else — e.g. an AVFoundation asset-loading failure — is
-        // always terminal
-        // "Asset layer": there is no retryable branch to fall into here.
+        // Anything else (e.g. an AVFoundation asset-loading failure) is always
+        // terminal — the asset layer has no retryable branch.
         return .terminal(classifyAsset(error))
     }
 
@@ -68,13 +67,10 @@ enum FailureClassifier {
 
     // MARK: - Asset layer
     private static func classifyAsset(_ error: Error) -> PlaybackError {
-        // Deliberately not distinguishing .decodeFailed vs .unsupportedFormat
-        // by inspecting AVFoundation's actual AVError codes yet — MediaSource
-        // (which owns the AVAsset/AVAssetResourceLoader integration) doesn't
-        // exist yet, and guessing at exact AVError case names here risks
-        // shipping a classification that silently never matches. Defaulting
-        // to .decodeFailed; revisit once MediaSource can hand this the real
-        // AVError it saw.
+        // Deliberately not distinguishing .decodeFailed from .unsupportedFormat by inspecting
+        // real AVError codes yet, and no dedicated .cancelled case — see
+        // Documentation/CURRENT_STATE.md's known limitations. Defaulting to .decodeFailed until
+        // this is revisited.
         .decodeFailed
     }
 }

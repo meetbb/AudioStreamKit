@@ -7,7 +7,9 @@
 
 import Foundation
 
-enum PlaybackState: Equatable {
+/// See `Documentation/architecture/public-api.md` §2 — the state type is public even though
+/// the engine driving it (`PlaybackStateMachine`) is not.
+public enum PlaybackState: Equatable, Sendable {
     case idle
     case loading
     case buffering

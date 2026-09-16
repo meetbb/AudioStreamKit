@@ -37,12 +37,10 @@ protocol MediaSourceDelegate: AnyObject {
 /// requests itself, rather than letting AVFoundation stream from the remote URL opaquely.
 /// See `ADR-001-resource-loading-strategy.md` and `streaming-and-caching.md`.
 ///
-/// Not an `actor`: `AVAssetResourceLoaderDelegate` requires conformance to
-/// `NSObjectProtocol`, which a Swift `actor` cannot satisfy. Safety for this type's own
-/// mutable state instead comes from two things working together (`concurrency-model.md`
-/// §3): a dedicated serial delegate queue (so AVFoundation itself never calls two delegate
-/// methods concurrently) and a nested `actor` (`LoadingRequestTracker`) that owns the
-/// loadingRequest -> Task bookkeeping needed for correct cancellation.
+/// Not an `actor`: `AVAssetResourceLoaderDelegate` requires `NSObjectProtocol`, which a Swift
+/// `actor` can't satisfy. Instead, a dedicated serial delegate queue plus a nested `actor`
+/// (`LoadingRequestTracker`) protect this type's mutable state — see `concurrency-model.md` §3
+/// for the full reasoning.
 ///
 /// `contentInformationRequest` answers from `MediaCache` when cached, otherwise probes the
 /// origin and stores the result. On a cache hit it also opportunistically revalidates

@@ -14,10 +14,8 @@ typealias PlatformImage = UIImage
 
 extension PlatformImage {
     /// Renders this image at `size`, used by `publishNowPlayingInfo`'s `MPMediaItemArtwork`
-    /// request closure — a real gap, caught in review: that closure used to ignore the size the
-    /// system actually asked for and always hand back the full original image, which the lock
-    /// screen (wanting a small thumbnail) would just have to downscale itself, wasting memory/CPU
-    /// proportional to how much larger the source artwork was than what was actually needed.
+    /// request closure so the lock screen gets exactly the thumbnail size it asks for, instead
+    /// of downscaling the full original image itself.
     func resized(to size: CGSize) -> PlatformImage {
         UIGraphicsImageRenderer(size: size).image { _ in
             draw(in: CGRect(origin: .zero, size: size))
@@ -48,9 +46,8 @@ extension PlatformImage {
 import os
 
 /// Scoped to this file only — every `AVAudioSession` call that can fail silently (`try?`) or
-/// discard its underlying error (`activateAudioSession()`'s rethrow) logs through here instead,
-/// so a field report of "audio randomly doesn't work" has something to look at (a real bug,
-/// caught in review: this file previously had no logging path at all).
+/// discard its underlying error (`activateAudioSession()`'s rethrow) logs through here, so a
+/// field report of "audio randomly doesn't work" has something to look at.
 private let logger = Logger(subsystem: "AudioStreamKit", category: "PlaybackEngine")
 #endif
 
@@ -113,11 +110,11 @@ actor PlaybackEngine {
     nonisolated(unsafe) private var interruptionObservation: NSObjectProtocol?
 
     /// Removes both `NotificationCenter` tokens still outstanding if this engine is deallocated
-    /// without `stop()` having run first (a real gap, caught in review: unlike KVO's
-    /// `NSKeyValueObservation`, which auto-invalidates when its token deallocates,
-    /// `NotificationCenter.addObserver(forName:object:queue:using:)` does **not** — the caller
-    /// is responsible for calling `removeObserver(_:)` explicitly, or the registration and its
-    /// closure stay alive in `NotificationCenter` indefinitely). An actor's `deinit` is
+    /// without `stop()` having run first — unlike KVO's `NSKeyValueObservation`, which
+    /// auto-invalidates when its token deallocates, `NotificationCenter.addObserver(forName:
+    /// object:queue:using:)` does **not**: the caller is responsible for calling
+    /// `removeObserver(_:)` explicitly, or the registration and its closure stay alive in
+    /// `NotificationCenter` indefinitely. An actor's `deinit` is
     /// implicitly `nonisolated` and can't `await`, but doesn't need to here: reading these
     /// stored properties and calling `removeObserver(_:)` are both safe synchronously — no
     /// concurrent access to `self` is possible once `deinit` begins, and `NotificationCenter`'s
@@ -181,11 +178,11 @@ actor PlaybackEngine {
         // guards against `self` being deallocated before either `Task` runs.
         //
         // Interruption observation is registered here too (permanently, for the engine's whole
-        // lifetime), not per-item in `startObserving(_:)` as it originally was — a real gap,
-        // caught in review: scoping it to "while a session is loaded" meant a `load(_:)` that
-        // failed before building a player (e.g. the audio session was unavailable) left the app
-        // with no observer at all, so even if whatever was contending for audio then went away,
-        // nothing would notice. Interruptions are an app-level, not item-level, concern — there's
+        // lifetime), not per-item in `startObserving(_:)`: scoping it to "while a session is
+        // loaded" would mean a `load(_:)` that failed before building a player (e.g. the audio
+        // session was unavailable) leaves the app with no observer at all, so even if whatever
+        // was contending for audio then went away, nothing would notice. Interruptions are an
+        // app-level, not item-level, concern — there's
         // no `AVPlayerItem` this needs scoping to, unlike the KVO/notification observers
         // `startObserving(_:)` still owns. This does not by itself make a failed `load(_:)`
         // retry automatically — the state machine has no "pending load" concept, and building
@@ -426,10 +423,7 @@ actor PlaybackEngine {
     /// `PlaybackStateMachine` is pure (`concurrency-model.md` §2) — applying `.interruptionBegan`/
     /// `.interruptionEnded` only computes the *state* that should result, it has no side effect
     /// on the real `AVPlayer`. Translating that into an actual `player.pause()`/`player.play()`
-    /// call is this function's job, same as `play()`/`pause()` already do for direct commands —
-    /// this was originally missing here entirely (a real bug, caught in review: the state
-    /// machine would correctly report `.paused`/`.buffering` and Now Playing would correctly
-    /// reflect it, while the real player kept doing whatever it was already doing).
+    /// call is this function's job, same as `play()`/`pause()` already do for direct commands.
     ///
     /// `#if os(iOS)`: `AVAudioSession` itself is iOS/tvOS/watchOS-only — explicitly unavailable
     /// on macOS, which this package also targets (`Package.swift`). Everywhere else in this
@@ -496,14 +490,12 @@ actor PlaybackEngine {
         lastPublishedDuration = nil
         lastPublishTimestamp = nil
 
-        // Deliberately does NOT deactivate the audio session — that used to happen here
-        // unconditionally, which meant every `load(_:)` (this function's other caller, for
-        // replacing the current item) deactivated-then-immediately-reactivated the session on
-        // every single track change. A real bug, caught in review: `.notifyOthersOnDeactivation`
-        // explicitly tells other apps "you may resume now," so rapid track skipping in a
-        // playlist repeatedly signalled other apps to un-duck and then immediately re-duck —
-        // an audible glitch in whatever else happens to be playing. `stop()` is the only place
-        // that actually means "give up the speaker," so it deactivates explicitly itself.
+        // Deliberately does NOT deactivate the audio session — `stop()` is the only place that
+        // actually means "give up the speaker," so it deactivates explicitly itself.
+        // `.notifyOthersOnDeactivation` explicitly tells other apps "you may resume now";
+        // deactivating here too (this function's other caller is `load(_:)`, for replacing the
+        // current item) would repeatedly signal other apps to un-duck and immediately re-duck on
+        // every track change in a playlist — an audible glitch in whatever else is playing.
         // `load(_:)`'s own `activateAudioSession()` call a few lines later is a safe no-op if
         // the session was already active across the item change.
     }
@@ -580,20 +572,17 @@ actor PlaybackEngine {
     /// Declares this app as a playback app and claims the speaker. Called from `load(_:)` right
     /// before building the new `AVPlayer`, and again from `handleAudioSessionInterruption`'s
     /// `.ended` case when resuming. Sets the category every time, not just once at `init` —
-    /// setting it is cheap and idempotent, and folding it in here removes a real race, caught in
-    /// review: category configuration and activation used to be two independently-scheduled
-    /// fire-and-forget `Task`s from `init`, with no ordering guarantee between them — a `load(_:)`
-    /// called immediately after construction could activate the session before the category had
-    /// actually been set, silently activating under whatever category was previously in effect
-    /// (e.g. the system default) instead of `.playback`. One call site, always in the right
-    /// order, makes the race structurally impossible rather than synchronized around.
+    /// cheap and idempotent. Configuration and activation are combined into this one call, in
+    /// this order, so there's no window where `load(_:)` could activate the session before the
+    /// category is set (which would silently activate under the wrong category, e.g. the system
+    /// default, instead of `.playback`). One call site, always in the right order, makes that
+    /// race structurally impossible rather than something to synchronize around.
     ///
     /// Can fail (e.g. another app holds exclusive audio), in which case the caller reports it
     /// through the same `apply(.itemFailed(...))` funnel every other `load(_:)` failure already
     /// uses. Logs the real underlying error before rethrowing the generic
-    /// `.audioSessionUnavailable` — the specific reason (another app has priority vs. a
-    /// hardware/category problem, etc.) used to be discarded entirely, leaving no way to
-    /// diagnose *why* activation failed in the field.
+    /// `.audioSessionUnavailable`, so the specific reason (another app has priority vs. a
+    /// hardware/category problem, etc.) is diagnosable in the field instead of discarded.
     #if os(iOS)
     private func activateAudioSession() throws {
         do {
@@ -630,64 +619,36 @@ actor PlaybackEngine {
 
     // MARK: - Now Playing / Remote Command Center (FR6)
 
-    /// Recomputes the Now-Playing-relevant `(rate, elapsedTime, duration)` tuple from current
-    /// state and, only if it actually represents a real change, hands it off to
-    /// `publishNowPlayingInfo` to write. Called from `apply(_:)` after every `PlaybackEvent`
-    /// (not a hand-picked subset — see `Documentation/CURRENT_STATE.md`/design discussion: a
-    /// picked list of "which events matter" drifts as events get added) and from `load(_:)`
-    /// directly (its own `apply(.loadRequested)` fires before `currentMediaItem` is set, so it
-    /// needs a second call after).
+    /// Recomputes the Now Playing tuple `(rate, elapsedTime, duration)` and publishes it to
+    /// `MPNowPlayingInfoCenter` — but only when something actually changed, to avoid an extra
+    /// `MainActor` hop on every event. Called from `apply(_:)` after every `PlaybackEvent`
+    /// (deliberately not a hand-picked subset, since that list would just drift out of date as
+    /// events get added), plus once more directly from `load(_:)`, because its own
+    /// `apply(.loadRequested)` fires before `currentMediaItem` is set.
     ///
-    /// "Real change" is `rate`/`duration` differing from what was last published, OR `elapsed`
-    /// landing somewhere other than where it should, given `lastPublishedRate` and how much
-    /// wall-clock time has passed since `lastPublishTimestamp` — i.e. an actual seek, not just
-    /// ordinary ticking. Comparing `elapsed` by raw inequality (a prior version's approach — a
-    /// real bug, caught in review) doesn't work: `currentTime` strictly increases while
-    /// `.playing`, so it differs from the last published value on essentially every call,
-    /// defeating the dedup precisely when it matters most — a burst of `.networkStallBegan`/
-    /// `.networkStallRecovered` events on a flaky connection would each independently look like
-    /// a "real" change and hop to `MainActor`, even though `MPNowPlayingInfoCenter` already
-    /// extrapolates elapsed time from rate + a reference point on its own and doesn't need it
-    /// re-sent every tick. The extrapolation check keeps that burst cheap while still publishing
-    /// immediately on anything that's actually a discontinuity.
+    /// ## What counts as a "real" change
+    /// Rate or duration changing, or an actual seek. Checking `elapsed != lastPublishedElapsed`
+    /// isn't good enough — `elapsed` changes on almost every call while playing, so that would
+    /// defeat the whole point of deduping (e.g. a stall-then-recover burst on a flaky connection
+    /// would spam `MainActor` for no reason). Instead we predict where `elapsed` *should* be,
+    /// given the last published rate and how much time has passed, and only treat it as a real
+    /// seek if it's off by more than `elapsedDiscontinuityThreshold`. `MPNowPlayingInfoCenter`
+    /// already extrapolates elapsed time on its own, so ordinary ticking doesn't need re-sending.
     ///
-    /// This is the *only* function that writes to `MPNowPlayingInfoCenter` — `stop()` doesn't
-    /// call a separate "clear" method. `teardownCurrentSession()` (called from both `stop()` and
-    /// `load(_:)`) resets `currentMediaItem` to `nil` before `apply(_:)` runs, so the `nil`
-    /// branch below is what "clear the lock screen" actually is: one more state this same
-    /// dedup-guarded function reacts to, not a second, independently-racing writer.
+    /// ## Clearing the lock screen
+    /// There's no separate "clear" method. `stop()`/`load(_:)` both go through
+    /// `teardownCurrentSession()`, which sets `currentMediaItem = nil` before this function runs
+    /// — so the `nil` branch below *is* the clear path, not a second writer. Two things to know:
+    /// - It only clears in `.idle`/`.failed` (truly nothing loaded), never in `.loading` — a
+    ///   fresh `load(_:)` passes through `currentMediaItem == nil` for a moment before setting
+    ///   it, and clearing there would just be undone immediately.
+    /// - It checks `isNowPlayingInfoPublished`, not the `lastPublished*` fields, to know whether
+    ///   there's anything to clear — those fields are already reset to `nil` by the time this
+    ///   branch runs.
     ///
-    /// The `nil` branch can't use `lastPublishedRate`/`lastPublishedElapsedTime`/
-    /// `lastPublishedDuration` to detect "was anything published" — `teardownCurrentSession()`
-    /// already reset those to `nil` before `apply(_:)` runs, for *both* `stop()` and `load(_:)`.
-    /// `isNowPlayingInfoPublished` tracks that independently. It also can't clear on every `nil`
-    /// `currentMediaItem`: `load(_:)`'s own `apply(.loadRequested)` hits this same branch while
-    /// `currentMediaItem` is transiently `nil` (before `load(_:)` sets it a few lines later) —
-    /// clearing there would be undone a moment later anyway, the exact "wasted extra write"
-    /// `load(_:)`'s teardown call was already designed to avoid. `.idle` (true only after
-    /// `.stopRequested`, or before anything has ever loaded) and `.failed` (a `load(_:)` that
-    /// didn't make it far enough to set `currentMediaItem` — an invalid URL or a session
-    /// activation failure) are both "truly nothing loaded" states; `.loading` (from
-    /// `.loadRequested`, momentarily, before `load(_:)` sets `currentMediaItem` a few lines
-    /// later) is the one that must *not* trigger a clear here.
-    ///
-    /// `.failed` was originally left out of this check (a real bug, caught in review): a
-    /// `load(_:)` call that failed before setting `currentMediaItem` would leave whatever was
-    /// published for the *previous*, unrelated item frozen on the lock screen indefinitely —
-    /// wrong metadata, wrong rate, with no indication anything failed, until the next successful
-    /// `load(_:)` or an explicit `stop()`. A `.failed` reached *after* `currentMediaItem` was
-    /// already set (e.g. a decode error mid-playback, not this branch at all — the non-`nil`
-    /// branch below handles that case) is unaffected by this fix and correctly keeps showing
-    /// that item's real metadata with `rate: 0.0`.
-    ///
-    /// A prior version had a separate `clearNowPlayingInfo()` awaited directly inside `stop()`,
-    /// with no guard at all before writing — a `load(_:)` reentering the actor during that
-    /// `await` could have its fresh publish land *before* the stale clear, wiping out valid info
-    /// for the newly-loading item. Collapsing to one writer removes most of that risk, but the
-    /// underlying hazard (two independent `Task`s racing to `MainActor`) still applies to this
-    /// branch too — `clearNowPlayingInfo()` re-checks `currentMediaItem == nil` right before
-    /// writing, so if a `load(_:)` lands in the meantime, this clear becomes a no-op instead of
-    /// overwriting that load's own publish.
+    /// Both this function and `publishNowPlayingInfo`/`clearNowPlayingInfo` below guard against
+    /// a `load(_:)` racing in while a previous publish/clear is still hopping to `MainActor` —
+    /// see those functions for how.
     private func refreshNowPlayingInfo() {
         guard let currentMediaItem else {
             let nothingIsLoaded: Bool
@@ -752,10 +713,9 @@ actor PlaybackEngine {
     /// `currentItem` (actor-isolated, so safe to read here before the hop) against `expectedItem`
     /// first — see `refreshNowPlayingInfo()`'s doc comment for why this guard exists.
     ///
-    /// Artwork is decoded here, on this actor's own executor, *before* the `MainActor` hop — not
-    /// inside the `MainActor.run` closure, where it used to run. A real bug, caught in review:
-    /// `PlatformImage(data:)` is a real, potentially expensive decode for a large embedded image,
-    /// and running it on the main thread risked a visible UI hitch in the host app at exactly the
+    /// Artwork is decoded here, on this actor's own executor, *before* the `MainActor` hop, since
+    /// `PlatformImage(data:)` is a potentially expensive decode for a large embedded image and
+    /// running it on the main thread would risk a visible UI hitch in the host app at exactly the
     /// moment least wanted (mid-scroll, mid-animation). Decoding off-main and handing the
     /// already-decoded image into the closure keeps the main-thread portion to just the
     /// dictionary write itself.
@@ -829,7 +789,7 @@ actor PlaybackEngine {
     /// no-op rather than a crash. Called once, from `init`.
     ///
     /// `removeTarget(nil)` (removes *every* target for that command, not just ones registered
-    /// by a specific object) runs before each `addTarget` — a real bug, caught in review: since
+    /// by a specific object) runs before each `addTarget`: since
     /// `MPRemoteCommandCenter.shared()` is a single process-global object and there is no
     /// `deinit`-time cleanup an actor can run, every `PlaybackEngine` instance ever created over
     /// an app's lifetime (logout/login, account switching, a rebuilt player) would otherwise
