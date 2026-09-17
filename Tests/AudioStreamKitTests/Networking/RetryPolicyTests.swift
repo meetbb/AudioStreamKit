@@ -29,6 +29,8 @@ final class RetryPolicyTests: XCTestCase {
 
     // MARK: - Success paths: backoff calculation
 
+    /// Checks that with the default settings, the wait time before each retry doubles each
+    /// time, as expected.
     func test_defaultPolicy_delayDoublesPerAttempt_untilCapped() {
         let policy = RetryPolicy.default // maxAttempts: 5, baseDelay: 0.5, maxDelay: 16
 
@@ -39,6 +41,8 @@ final class RetryPolicyTests: XCTestCase {
         XCTAssertEqual(policy.delay(forAttempt: 5), 8.0)
     }
 
+    /// Checks that the wait time between retries never grows past its maximum, even after many
+    /// attempts.
     func test_delay_isCappedAtMaxDelay_evenBeyondMaxAttempts() {
         let policy = RetryPolicy.default
 
@@ -47,6 +51,8 @@ final class RetryPolicyTests: XCTestCase {
         XCTAssertEqual(policy.delay(forAttempt: 7), 16.0)
     }
 
+    /// Checks that custom retry settings (not just the defaults) are actually respected when
+    /// calculating wait times.
     func test_customPolicy_respectsItsOwnParameters() {
         let policy = RetryPolicy(maxAttempts: 3, baseDelay: 1.0, maxDelay: 2.0)
 
@@ -57,6 +63,8 @@ final class RetryPolicyTests: XCTestCase {
 
     // MARK: - Retry behaviour: budget boundary
 
+    /// Checks that retries are allowed up to the maximum attempt count, and correctly refused
+    /// right after that.
     func test_hasBudget_trueWithinMaxAttempts_falseBeyond() {
         let policy = RetryPolicy.default // maxAttempts: 5
 
@@ -65,6 +73,7 @@ final class RetryPolicyTests: XCTestCase {
         XCTAssertFalse(policy.hasBudget(forAttempt: 6))
     }
 
+    /// Checks that a custom retry limit (like allowing only one attempt) is respected.
     func test_hasBudget_withCustomMaxAttempts() {
         let policy = RetryPolicy(maxAttempts: 1, baseDelay: 0.1, maxDelay: 1.0)
 
@@ -74,10 +83,9 @@ final class RetryPolicyTests: XCTestCase {
 
     // MARK: - Concurrency
 
+    /// Checks that asking for the same wait time from many places at once always gives the
+    /// same, correct answer — nothing gets mixed up.
     func test_delay_isConsistentWhenCalledConcurrently() async {
-        // RetryPolicy carries no mutable state, so calling it from many
-        // tasks at once must never produce a result other than the pure
-        // function's own output for that attempt number.
         let policy = RetryPolicy.default
 
         await withTaskGroup(of: (Int, TimeInterval).self) { group in

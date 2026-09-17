@@ -348,10 +348,18 @@ actor PlaybackEngine {
     /// `.itemFailed(PlaybackError)` (`error-handling-strategy.md` §4, Asset layer row —
     /// currently always `.decodeFailed` until real `AVError` codes are distinguished, per
     /// `CURRENT_STATE.md`'s known limitation).
+    ///
+    /// `.itemReady` landing on `.buffering` means `play()` was called while still `.loading`
+    /// (`autoPlayOnReady`, `playback-state-machine.md` `.loading` row) — the state machine only
+    /// records that intent, so the real `player.play()` call that was skipped back then (there
+    /// was no player yet) has to happen here instead, once there finally is one.
     private func handleItemStatusChange(_ item: AVPlayerItem) {
         switch item.status {
         case .readyToPlay:
             apply(.itemReady)
+            if stateMachine.state == .buffering {
+                player?.play()
+            }
         case .failed:
             let underlying = item.error ?? PlaybackError.decodeFailed
             apply(.itemFailed(FailureClassifier.classify(underlying).playbackError))

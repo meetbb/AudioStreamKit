@@ -31,6 +31,22 @@ public actor AudioPlayer {
         self.engine = PlaybackEngine(stateSink: continuation, mediaSource: mediaSource)
     }
 
+    /// Test-only seam (not exposed publicly — `public-api.md` §7 already rejected a public
+    /// protocol for mocking). Lets tests supply a `PlaybackEngine` built around a test
+    /// `MediaSource`/local server, so `AudioPlayer`'s delegation and `AsyncStream` wiring can be
+    /// verified without going through the public init's real `MediaCache`/`MediaSource` stack.
+    /// `states`/`stateContinuation` must be the same stream `engine` was constructed with
+    /// (`PlaybackEngine(stateSink:mediaSource:)` takes the continuation at init).
+    init(
+        states: AsyncStream<PlaybackState>,
+        stateContinuation: AsyncStream<PlaybackState>.Continuation,
+        engine: PlaybackEngine
+    ) {
+        self.states = states
+        self.stateContinuation = stateContinuation
+        self.engine = engine
+    }
+
     /// Finishes `states` so a consumer's `for await` loop terminates if this instance is
     /// deallocated without an explicit `stop()` first.
     deinit {

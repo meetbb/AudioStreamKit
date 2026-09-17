@@ -29,6 +29,8 @@ final class FailureClassifierTests: XCTestCase {
 
     // MARK: - Network interruption / retry behaviour: URLError codes
 
+    /// Checks that temporary network problems (like a dropped connection) are marked as worth
+    /// retrying.
     func test_transientNetworkErrors_areRetryable() {
         let retryableCodes: [URLError.Code] = [
             .timedOut, .networkConnectionLost, .cannotConnectToHost,
@@ -41,6 +43,8 @@ final class FailureClassifierTests: XCTestCase {
         }
     }
 
+    /// Checks that a broken or unsupported web address is marked as a dead end, not something
+    /// worth retrying.
     func test_malformedURLErrors_areTerminal_notRetried() {
         for code: URLError.Code in [.badURL, .unsupportedURL] {
             let urlError = URLError(code)
@@ -49,9 +53,9 @@ final class FailureClassifierTests: XCTestCase {
         }
     }
 
+    /// Checks that an unfamiliar network error safely defaults to "don't retry," instead of
+    /// accidentally retrying forever.
     func test_unrecognizedURLError_defaultsToTerminal() {
-        // Any URLError code not explicitly listed as retryable falls back
-        // to terminal rather than being silently retried forever.
         let urlError = URLError(.dataNotAllowed)
         let result = FailureClassifier.classify(urlError)
         XCTAssertEqual(result, .terminal(.network(urlError)))
@@ -59,6 +63,8 @@ final class FailureClassifierTests: XCTestCase {
 
     // MARK: - Retry behaviour: HTTP status codes
 
+    /// Checks that server error codes which are usually temporary (like a timeout or an
+    /// overloaded server) are marked as worth retrying.
     func test_retryableHTTPStatusCodes() {
         for statusCode in [408, 429, 500, 503, 599] {
             let error = HTTPStatusError(statusCode: statusCode)
@@ -67,6 +73,8 @@ final class FailureClassifierTests: XCTestCase {
         }
     }
 
+    /// Checks that error codes which won't be fixed by retrying (like "not found" or
+    /// "unauthorized") are correctly marked as dead ends.
     func test_terminalHTTPStatusCodes() {
         for statusCode in [400, 401, 404, 407, 499, 600] {
             let error = HTTPStatusError(statusCode: statusCode)
@@ -79,11 +87,15 @@ final class FailureClassifierTests: XCTestCase {
 
     private struct SomeUnrelatedError: Error {}
 
+    /// Checks that a completely unknown kind of error still gets a sensible fallback
+    /// classification, instead of crashing or being ignored.
     func test_unrecognizedErrorType_classifiesAsTerminalDecodeFailed() {
         let result = FailureClassifier.classify(SomeUnrelatedError())
         XCTAssertEqual(result, .terminal(.decodeFailed))
     }
 
+    /// Checks that the original playback error can always be pulled back out of a
+    /// classification result.
     func test_classification_exposesUnderlyingPlaybackError() {
         let result = FailureClassifier.classify(URLError(.timedOut))
         XCTAssertEqual(result.playbackError, .network(URLError(.timedOut)))
@@ -91,23 +103,16 @@ final class FailureClassifierTests: XCTestCase {
 
     // MARK: - Cancellation
 
+    /// Checks that a request the app itself cancelled is never mistakenly retried.
     func test_cancelledURLError_isClassifiedAsTerminal_notRetried() {
-        // URLError.cancelled isn't in the retryable list, so it falls to
-        // the "any other URLError" default of terminal — a cancelled
-        // request must never be retried.
         let urlError = URLError(.cancelled)
         let result = FailureClassifier.classify(urlError)
         XCTAssertEqual(result, .terminal(.network(urlError)))
     }
 
+    /// Documents a known gap: a generic cancellation error isn't specially recognized yet, so
+    /// it falls back to the same generic classification as any unknown error.
     func test_cancellationError_fallsToAssetLayerDefault() {
-        // Documents current behavior rather than an intentional design:
-        // a plain CancellationError isn't URLError/HTTPStatusError, so it
-        // falls into the asset-layer catch-all and comes back as
-        // .terminal(.decodeFailed) — the same placeholder classification
-        // used for every unrecognized error (see FailureClassifier's
-        // `classifyAsset`, which doesn't yet inspect real AVFoundation
-        // error codes). Flagged, not fixed, per this command's scope.
         let result = FailureClassifier.classify(CancellationError())
         XCTAssertEqual(result, .terminal(.decodeFailed))
     }

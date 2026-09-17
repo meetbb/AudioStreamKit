@@ -16,6 +16,8 @@ import MediaPlayer
 /// (`MediaSource.makeAsset` throws before any I/O), so it's fully unit-testable here.
 final class PlaybackEngineTests: XCTestCase {
 
+    /// Checks that loading a track with a bad web address fails properly instead of crashing
+    /// or hanging. It should briefly show as loading, then fail.
     func test_load_withUnsupportedScheme_reportsLoadingThenInvalidURLFailure() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -33,13 +35,9 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     // MARK: - play() / pause() ignored paths
-    //
-    // The "real" branches of play()/pause() (resuming from .paused, cancelling a retry out of
-    // .stalled) need a resolved asset to reach those states — same network gap as above. What's
-    // testable without one is that calling either command before/without a loaded item is a
-    // safe no-op, per the state machine's "ignored" rule (playback-state-machine.md §4) — a
-    // realistic scenario (a user tapping play/pause before content has loaded).
 
+    /// Checks that tapping play before anything is loaded does nothing harmful — the player
+    /// just stays idle.
     func test_play_beforeAnyLoad_staysIdle() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -52,6 +50,8 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(state, .idle)
     }
 
+    /// Checks that tapping pause before anything is loaded does nothing harmful — the player
+    /// just stays idle.
     func test_pause_beforeAnyLoad_staysIdle() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -64,6 +64,8 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(state, .idle)
     }
 
+    /// Checks that tapping play after a failed load doesn't wrongly clear the failure — the
+    /// player should stay in its failed state.
     func test_play_afterFailedLoad_staysFailed() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -82,6 +84,8 @@ final class PlaybackEngineTests: XCTestCase {
 
     // MARK: - stop()
 
+    /// Checks that stopping when nothing was ever loaded is safe and simply leaves the player
+    /// idle, even if called more than once.
     func test_stop_beforeAnyLoad_isIdempotent_staysIdle() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -94,6 +98,7 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(state, .idle)
     }
 
+    /// Checks that stopping after a failed load correctly resets the player back to idle.
     func test_stop_afterFailedLoad_returnsToIdle() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -111,13 +116,9 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     // MARK: - seek(to:) ignored paths
-    //
-    // The "real" branches (an actual `player.seek(to:)` call from `.buffering`/`.playing`/
-    // `.paused`/`.stalled`/`.ended`) need a resolved asset to reach those states — same network
-    // gap as the rest of this file. What's testable here is that `.idle`/`.loading`/`.failed`
-    // ignore the event, per the state machine's rules (playback-state-machine.md `.loading` row
-    // note, §4).
 
+    /// Checks that trying to seek before anything is loaded does nothing harmful — the player
+    /// just stays idle.
     func test_seek_beforeAnyLoad_staysIdle() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -130,6 +131,8 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(state, .idle)
     }
 
+    /// Checks that trying to seek after a failed load doesn't wrongly clear the failure — the
+    /// player should stay in its failed state.
     func test_seek_afterFailedLoad_staysFailed() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         let stream = AsyncStream<PlaybackState> { continuation = $0 }
@@ -147,11 +150,8 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     // MARK: - currentTime / duration
-    //
-    // Only the "no player yet" defaults are testable without a resolved asset — the real
-    // values (a genuine position/duration once `.itemReady` fires) need the same network
-    // gap noted throughout this file.
 
+    /// Checks that the playback position reads as zero before anything has ever been loaded.
     func test_currentTime_beforeAnyLoad_isZero() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         _ = AsyncStream<PlaybackState> { continuation = $0 }
@@ -161,6 +161,8 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertEqual(currentTime, 0)
     }
 
+    /// Checks that the track length is unknown (not a bogus zero) before anything has ever
+    /// been loaded.
     func test_duration_beforeAnyLoad_isNil() async {
         var continuation: AsyncStream<PlaybackState>.Continuation!
         _ = AsyncStream<PlaybackState> { continuation = $0 }
@@ -171,22 +173,6 @@ final class PlaybackEngineTests: XCTestCase {
     }
 
     // MARK: - Now Playing info (FR6)
-    //
-    // MPNowPlayingInfoCenter is a real, process-global system singleton, same as
-    // MPRemoteCommandCenter — but unlike registering command targets (which would leak
-    // duplicate registrations across test runs, the reason `configureRemoteCommands()` has no
-    // injectable seam), reading/overwriting `nowPlayingInfo` is safe to do directly: each
-    // publish fully replaces the dictionary, so there's nothing to leak between tests beyond
-    // the dictionary's own contents, which each test resets before asserting.
-    //
-    // `refreshNowPlayingInfo()` publishes via a fire-and-forget `Task` hopped to `MainActor` —
-    // not awaited by `load()`/`stop()` — so assertions poll with `waitUntil` rather than
-    // checking immediately after an `await engine.load(...)`/`await engine.stop()` returns.
-    //
-    // A valid `https://` URL (vs. the `ftp://` used elsewhere in this file) is needed here so
-    // `load(_:)` actually builds an `AVPlayer`/sets `currentMediaItem` and reaches
-    // `refreshNowPlayingInfo()` — `https://example.com/...` is the existing convention for this
-    // in `MediaSourceTests.swift`; nothing here waits for or depends on the URL ever resolving.
 
     private func waitUntil(timeout: TimeInterval = 2, _ condition: () -> Bool) async {
         let deadline = Date().addingTimeInterval(timeout)
@@ -196,6 +182,8 @@ final class PlaybackEngineTests: XCTestCase {
         }
     }
 
+    /// Checks that loading a track shows its title and artist on the lock screen, and that it
+    /// correctly shows as not-yet-playing.
     func test_load_publishesNowPlayingInfo_withTitleArtistAndZeroRate() async {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         var continuation: AsyncStream<PlaybackState>.Continuation!
@@ -223,6 +211,7 @@ final class PlaybackEngineTests: XCTestCase {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
     }
 
+    /// Checks that stopping playback removes the track info from the lock screen.
     func test_stop_afterLoad_clearsNowPlayingInfo() async {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         var continuation: AsyncStream<PlaybackState>.Continuation!
@@ -242,11 +231,8 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertNil(MPNowPlayingInfoCenter.default().nowPlayingInfo)
     }
 
-    // Regression test for a bug found in review (findings review, "stale Now Playing info after
-    // failed load"): a load(_:) that fails before setting currentMediaItem (invalid URL, or an
-    // audio session activation failure) landed on .failed, not .idle — and refreshNowPlayingInfo()'s
-    // "should I clear?" check originally only recognized .idle, so the *previous*, unrelated
-    // item's info stayed frozen on the lock screen indefinitely after an unrelated load failed.
+    /// Checks that if a new track fails to load, the old track's info doesn't stay stuck on the
+    /// lock screen — it should get cleared instead.
     func test_load_thatFails_afterSuccessfulLoad_clearsStaleNowPlayingInfo() async {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         var continuation: AsyncStream<PlaybackState>.Continuation!
@@ -271,12 +257,8 @@ final class PlaybackEngineTests: XCTestCase {
         XCTAssertNil(MPNowPlayingInfoCenter.default().nowPlayingInfo)
     }
 
-    // Regression test for a bug introduced (and caught before shipping) while implementing the
-    // clear-on-stop logic: `load(_:)`'s own internal `teardownCurrentSession()` also passes
-    // through the "nothing loaded" branch of `refreshNowPlayingInfo()` momentarily (before the
-    // new item is set) — that branch must recognize this as `.loading`, not `.idle`, and skip
-    // clearing, or every `load(_:)` would flash-clear the lock screen before immediately
-    // republishing the new item.
+    /// Checks that switching straight from one track to another updates the lock screen to the
+    /// new track, without ever flashing it blank in between.
     func test_loadingNewItem_afterAnotherItem_doesNotClear_endsWithNewItemsInfo() async {
         MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
         var continuation: AsyncStream<PlaybackState>.Continuation!
