@@ -302,6 +302,12 @@ actor PlaybackEngine {
 
         let target = CMTime(seconds: time, preferredTimescale: CMTimeScale(NSEC_PER_SEC))
         _ = await player?.seek(to: target)
+
+        // A short or already-buffered seek never changes `timeControlStatus`, so the KVO path
+        // never reports `.bufferingEnded` — resolve it here instead.
+        if stateMachine.state == .buffering, player?.timeControlStatus == .playing {
+            apply(.bufferingEnded)
+        }
     }
 
     // MARK: - Pull-based playback info (public-api.md §3)

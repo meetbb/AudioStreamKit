@@ -75,6 +75,22 @@ final class PlaybackEngineIntegrationTests: XCTestCase {
         XCTAssertEqual(currentTime, 1.0, accuracy: 0.2)
     }
 
+    /// Checks that seeking while a track is playing returns to playing instead of getting
+    /// stuck showing buffering.
+    func test_seekWhilePlaying_returnsToPlaying() async throws {
+        let (engine, states, server, url) = try await makeEngine()
+        defer { Task { await server.stop() } }
+
+        await engine.load(MediaItem(url: url))
+        await engine.play()
+        _ = await collectStates(from: states, until: { $0 == .playing })
+
+        await engine.seek(to: 0.5)
+        let observed = await collectStates(from: states, until: { $0 == .playing })
+
+        XCTAssertEqual(observed.last, .playing)
+    }
+
     /// Checks that if the server hosting a track is completely broken, loading it cleanly
     /// fails instead of hanging forever or crashing.
     func test_load_whenOriginAlwaysFails_reachesFailedState() async throws {
